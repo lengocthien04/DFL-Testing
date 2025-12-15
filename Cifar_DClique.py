@@ -57,30 +57,28 @@ random.seed(CFG.seed)
 # =====================
 
 class GNLeNet(nn.Module):
-    """
-    Group-Normalized LeNet for CIFAR-10.
-    Input: 3x32x32
-    """
-    def __init__(self, num_groups=4):
+    def __init__(self, num_classes=10):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 6, kernel_size=5)      # 32->28
-        self.gn1 = nn.GroupNorm(num_groups, 6)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=5)     # 14->10 after pool
-        self.gn2 = nn.GroupNorm(num_groups, 16)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=5, padding=2)
+        self.gn1 = nn.GroupNorm(8, 32)
 
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.gn3 = nn.GroupNorm(num_groups, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.gn4 = nn.GroupNorm(num_groups, 84)
-        self.fc3 = nn.Linear(84, 10)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=5, padding=2)
+        self.gn2 = nn.GroupNorm(8, 64)
+
+        self.pool = nn.MaxPool2d(2, 2)
+
+        self.fc1 = nn.Linear(64 * 8 * 8, 256)
+        self.gn3 = nn.GroupNorm(8, 256)
+
+        self.fc2 = nn.Linear(256, num_classes)
 
     def forward(self, x):
-        x = F.max_pool2d(F.relu(self.gn1(self.conv1(x))), 2)  # 32->28->14
-        x = F.max_pool2d(F.relu(self.gn2(self.conv2(x))), 2)  # 14->10->5
-        x = x.view(x.size(0), -1)                             # 16*5*5
-        x = F.relu(self.gn3(self.fc1(x)))
-        x = F.relu(self.gn4(self.fc2(x)))
-        return self.fc3(x)
+        x = self.pool(F.relu(self.gn1(self.conv1(x))))
+        x = self.pool(F.relu(self.gn2(self.conv2(x))))
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.gn3(self.fc1(x).unsqueeze(-1))).squeeze(-1)
+        return self.fc2(x)
+
 
 
 # =====================

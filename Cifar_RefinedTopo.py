@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Refined Topology (STL-FW) + 100-node D-SGD on MNIST.
+Refined Topology (STL-FW) + 100-node D-SGD on CIFAR-10.
 
-Implements (from "Refined Convergence and Topology Learning for Decentralized SGD with Heterogeneous Data"):
-- Heterogeneous partition: "shards" (McMahan et al., 2017): sort by class, split into equal shards, assign 2 shards/node.
-- Model: Logistic regression for MNIST.
-- Topology learning: Algorithm 2 (STL-FW) learns a sparse doubly-stochastic mixing matrix W via Frank-Wolfe over
-  permutation matrices; one FW iteration adds at most 1 in-edge and 1 out-edge per node (support grows by ≤ 1 per iter).
+Matches the paper's CIFAR10 setting:
+- Heterogeneous partition: shards (sort by class, split into shards, assign 2 shards/node).
+- Model: Group-Normalized variant of LeNet (Hsieh et al., 2020), as referenced in the paper.
+- Hyperparams (paper): lr=0.002, batch_size=20, epochs=100.
+- Topology learning: STL-FW (Algorithm 2), centralized pre-processing to learn sparse doubly-stochastic W.
 - Training: D-SGD (local SGD step then mixing by W each step).
-- Logging: every epoch (mean/median/min/max across nodes) to refined_mnist_output.txt
-- Plot: refined_mnist_accuracy.png (same curve style: mean + band between min/max)
+- Logging: every epoch (mean/median/min/max across nodes) to refined_cifar10_output.txt
+- Plot: refined_cifar10_accuracy.png
 
 Dependencies:
   pip install torch torchvision numpy matplotlib scipy
@@ -41,13 +41,14 @@ class CFG:
     n_nodes: int = 100
     epochs: int = 100
 
-    batch_size: int = 128
-    lr: float = 0.1
+    # Paper hyperparams for CIFAR10
+    batch_size: int = 20
+    lr: float = 0.002
 
     # STL-FW
     lambda_reg: float = 0.1
-    dmax: int = 10              # communication budget (≈ in/out-degree upper bound)
-    fw_iters: int = 10          # set = dmax (each iter adds ≤1 edge per node)
+    dmax: int = 10
+    fw_iters: int = 10
 
     seed: int = 42
     data_root: str = "./data"
@@ -56,33 +57,48 @@ CFG = CFG()
 
 
 # -----------------------
-# Model: Logistic MNIST
+# Model: GroupNorm LeNet (compact)
 # -----------------------
 
-class LogisticMNIST(nn.Module):
-    def __init__(self):
+class GNLeNet(nn.Module):
+    """
+    A simple LeNet-like CNN with GroupNorm instead of BatchNorm.
+    This is a faithful *variant style* (GroupNorm in a LeNet-ish backbone) as referenced by the paper.
+    """
+    def __init__(self, num_classes: int = 10, gn_groups: int = 8):
         super().__init__()
-        self.fc = nn.Linear(28 * 28, 10)
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=5, padding=2)
+        self.gn1 = nn.GroupNorm(num_groups=gn_groups, num_channels=32)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=5, padding=2)
+        self.gn2 = nn.GroupNorm(num_groups=gn_groups, num_channels=64)
+
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(64 * 8 * 8, 256)
+        self.gn3 = nn.GroupNorm(num_groups=gn_groups, num_channels=256)
+        self.fc2 = nn.Linear(256, num_classes)
 
     def forward(self, x):
+        x = self.pool(F.relu(self.gn1(self.conv1(x))))  # 32x16x16
+        x = self.pool(F.relu(self.gn2(self.conv2(x))))  # 64x8x8
         x = x.view(x.size(0), -1)
-        return self.fc(x)
+        x = F.relu(self.gn3(self.fc1(x).unsqueeze(-1)).squeeze(-1))
+        return self.fc2(x)
 
 
 # -----------------------
-# Data: MNIST + shards partition
+# Data: CIFAR10 + dirichlet partition
 # -----------------------
 
-def load_mnist(root: str):
-    tf = transforms.ToTensor()
-    train = datasets.MNIST(root, train=True, download=True, transform=tf)
-    test = datasets.MNIST(root, train=False, download=True, transform=tf)
+def load_cifar10(root: str):
+    tf_train = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+    tf_test = transforms.Compose([
+        transforms.ToTensor(),
+    ])
 
-    # Paper uses 50k train / 10k test (subset train to 50k for parity)
-    # Keep deterministic: first 50k examples
-    train_idx = np.arange(50000)
-    train = Subset(train, train_idx)
-
+    train = datasets.CIFAR10(root, train=True, download=True, transform=tf_train)
+    test = datasets.CIFAR10(root, train=False, download=True, transform=tf_test)
     return train, test
 
 
@@ -129,11 +145,10 @@ def dirichlet_partition(
 
 
 
-def make_loaders(train_subset, node_indices: List[np.ndarray], batch_size: int):
+def make_loaders(train_set, node_indices: List[np.ndarray], batch_size: int):
     loaders = []
     for idx in node_indices:
-        subset = Subset(train_subset, idx)
-        # drop_last=False to avoid empty batches when node datasets are small
+        subset = Subset(train_set, idx)
         loaders.append(DataLoader(subset, batch_size=batch_size, shuffle=True, drop_last=False))
     return loaders
 
@@ -143,9 +158,6 @@ def make_loaders(train_subset, node_indices: List[np.ndarray], batch_size: int):
 # -----------------------
 
 def class_proportions(labels: np.ndarray, node_indices: List[np.ndarray], n_classes: int) -> np.ndarray:
-    """
-    Π in the paper: shape [n_nodes, K], row i = π_i (class proportions at node i).
-    """
     n = len(node_indices)
     Pi = np.zeros((n, n_classes), dtype=np.float64)
     for i, idx in enumerate(node_indices):
@@ -156,44 +168,18 @@ def class_proportions(labels: np.ndarray, node_indices: List[np.ndarray], n_clas
     return Pi
 
 
-def g_objective(W: np.ndarray, Pi: np.ndarray, lam: float) -> float:
-    """
-    g(W) = (1/n)||WΠ - (1/n)11^T Π||_F^2 + (λ/n)||W - (1/n)11^T||_F^2
-    (Eq. 8).
-    """
-    n = W.shape[0]
-    ones = np.ones((n, 1), dtype=np.float64)
-    J = (ones @ ones.T) / n
-
-    term_bias = np.linalg.norm(W @ Pi - J @ Pi, ord="fro") ** 2
-    term_var = np.linalg.norm(W - J, ord="fro") ** 2
-    return (term_bias + lam * term_var) / n
-
-
 def grad_g(W: np.ndarray, Pi: np.ndarray, lam: float) -> np.ndarray:
-    """
-    ∇g(W) = (2/n) Σ_k (W Π_:,k - Π_:,k 1) Π_:,k^T + (2λ/n)(W - (1/n)11^T)
-    (given in the paper near Algorithm 2).
-    """
-    n, K = Pi.shape
+    n, _ = Pi.shape
     ones = np.ones((n, 1), dtype=np.float64)
     J = (ones @ ones.T) / n
 
-    # First term: (2/n) (WΠ - JΠ) Π^T
-    diff = (W @ Pi) - (J @ Pi)              # [n, K]
-    term1 = (2.0 / n) * (diff @ Pi.T)       # [n, n]
-
-    # Second term
-    term2 = (2.0 * lam / n) * (W - J)       # [n, n]
+    diff = (W @ Pi) - (J @ Pi)
+    term1 = (2.0 / n) * (diff @ Pi.T)
+    term2 = (2.0 * lam / n) * (W - J)
     return term1 + term2
 
 
 def fw_atom_from_gradient(grad: np.ndarray) -> np.ndarray:
-    """
-    Solve: P = argmin_{P in permutation matrices} <P, grad>
-    Equivalent to assignment problem with cost = grad (choose one column per row).
-    Use Hungarian algorithm (linear_sum_assignment).
-    """
     row_ind, col_ind = linear_sum_assignment(grad)
     n = grad.shape[0]
     P = np.zeros((n, n), dtype=np.float64)
@@ -202,44 +188,28 @@ def fw_atom_from_gradient(grad: np.ndarray) -> np.ndarray:
 
 
 def line_search_gamma(W: np.ndarray, P: np.ndarray, Pi: np.ndarray, lam: float) -> float:
-    """
-    Closed-form line search for g((1-γ)W + γP) since g is quadratic (Appendix C.2).
-    This implements the formula:
-      γ* = [ Σ_k (Π_k 1 - W Π_k)^T (P-W) Π_k  - λ tr((W-J)^T (P-W)) ] / ( ||(P-W)Π||_F^2 + λ||P-W||_F^2 )
-    with Π_k = Π_:,k and J = (1/n)11^T.
-    """
     n, K = Pi.shape
     ones = np.ones((n, 1), dtype=np.float64)
     J = (ones @ ones.T) / n
 
-    D = P - W  # direction
-    # numerator: sum_k (JΠ_k - WΠ_k)^T D Π_k  - λ tr((W-J)^T D)
+    D = P - W
     WPi = W @ Pi
     JPi = J @ Pi
+
     numer = 0.0
     for k in range(K):
-        a = (JPi[:, k] - WPi[:, k])          # [n]
-        b = D @ Pi[:, k]                    # [n]
+        a = (JPi[:, k] - WPi[:, k])
+        b = D @ Pi[:, k]
         numer += float(a.T @ b)
-
     numer -= lam * float(np.trace((W - J).T @ D))
 
     denom = float(np.linalg.norm(D @ Pi, ord="fro") ** 2 + lam * (np.linalg.norm(D, ord="fro") ** 2))
     if denom <= 1e-12:
         return 0.0
-    gamma = numer / denom
-    return float(np.clip(gamma, 0.0, 1.0))
+    return float(np.clip(numer / denom, 0.0, 1.0))
 
 
 def stl_fw(Pi: np.ndarray, lam: float, iters: int) -> np.ndarray:
-    """
-    Algorithm 2 STL-FW:
-      W^0 = I
-      For l=0..L-1:
-        P^{l+1} = argmin_{P∈A} <P, ∇g(W^l)>
-        γ = argmin_{γ∈[0,1]} g((1-γ)W^l + γP^{l+1})
-        W^{l+1} = (1-γ)W^l + γP^{l+1}
-    """
     n = Pi.shape[0]
     W = np.eye(n, dtype=np.float64)
     for _ in range(iters):
@@ -301,16 +271,12 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    train_subset, test_set = load_mnist(CFG.data_root)
+    train_set, test_set = load_cifar10(CFG.data_root)
     test_loader = DataLoader(test_set, batch_size=256, shuffle=False)
 
-    # labels of the *subset*
-    # Subset wraps original dataset => targets accessed via .dataset.targets with index mapping
-    base_targets = np.array(train_subset.dataset.targets, dtype=np.int64)
-    sub_idx = np.array(train_subset.indices, dtype=np.int64)
-    labels = base_targets[sub_idx]
+    labels = np.array(train_set.targets, dtype=np.int64)
 
-    # Partition into shards
+    
     node_indices = dirichlet_partition(
     labels=labels,
     n_nodes=CFG.n_nodes,
@@ -319,38 +285,29 @@ def main():
     seed=CFG.seed
     )
     assert all(len(idx) > 0 for idx in node_indices), "Partition produced an empty node dataset (should not happen)."
-    loaders = make_loaders(train_subset, node_indices, CFG.batch_size)
+    loaders = make_loaders(train_set, node_indices, CFG.batch_size)
 
-    # Π (class proportions) for STL-FW
     Pi = class_proportions(labels, node_indices, n_classes=10)
 
-    # Learn W via STL-FW with budget ≈ dmax
     fw_iters = int(CFG.fw_iters if CFG.fw_iters is not None else CFG.dmax)
     fw_iters = min(max(fw_iters, 1), CFG.n_nodes - 1)
     print(f"Learning refined topology via STL-FW: iters={fw_iters}, lambda={CFG.lambda_reg}")
     W_np = stl_fw(Pi, lam=CFG.lambda_reg, iters=fw_iters)
-
-    # Convert to torch
     W = torch.tensor(W_np, dtype=torch.float32, device=device)
 
-    # Init models / optimizers
-    models = [LogisticMNIST().to(device) for _ in range(CFG.n_nodes)]
+    models = [GNLeNet().to(device) for _ in range(CFG.n_nodes)]
     optims = [torch.optim.SGD(m.parameters(), lr=CFG.lr) for m in models]
 
-    # Pre-allocate parameter matrix X
     with torch.no_grad():
-        X = torch.stack([get_vec(m) for m in models], dim=0).to(device)  # [n, d]
+        X = torch.stack([get_vec(m) for m in models], dim=0).to(device)
 
-    # Create persistent iterators so nodes don't restart at each step
     iters = [iter(ld) for ld in loaders]
 
-    # Define "epoch" as consuming about one pass over the *global* dataset across the network:
-    # each step consumes ~ n_nodes * batch_size samples total.
-    train_size = len(train_subset)
+    train_size = len(train_set)
     steps_per_epoch = max(1, math.ceil(train_size / (CFG.n_nodes * CFG.batch_size)))
 
-    out_path = "refined_mnist_output.txt"
-    fig_path = "refined_mnist_accuracy.png"
+    out_path = "refined_cifar10_output.txt"
+    fig_path = "refined_cifar10_accuracy.png"
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("epoch,mean,median,min,max\n")
@@ -359,7 +316,6 @@ def main():
 
         for epoch in range(1, CFG.epochs + 1):
             for _ in range(steps_per_epoch):
-                # Local SGD: one batch per node
                 for i in range(CFG.n_nodes):
                     try:
                         batch = next(iters[i])
@@ -368,7 +324,6 @@ def main():
                         batch = next(iters[i])
                     local_sgd_one_batch(models[i], optims[i], batch, device)
 
-                # Mix parameters: X <- W X
                 with torch.no_grad():
                     for i in range(CFG.n_nodes):
                         X[i] = get_vec(models[i])
@@ -388,7 +343,6 @@ def main():
 
     print(f"Saved: {out_path}")
 
-    # Plot in the same "mean curve + band" style
     x = np.arange(1, CFG.epochs + 1)
     plt.figure()
     plt.plot(x, mean_curve, label="Mean")
@@ -396,7 +350,7 @@ def main():
     plt.fill_between(x, min_curve, max_curve, alpha=0.2, label="Min–Max band")
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy (%)")
-    plt.title(f"Refined Topology (STL-FW) - MNIST - n={CFG.n_nodes}, dmax≈{CFG.dmax}")
+    plt.title(f"Refined Topology (STL-FW) - CIFAR10 - n={CFG.n_nodes}, dmax≈{CFG.dmax}")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from data.mnist import load_mnist, make_mnist_loaders
 from models.mnist_models import LogisticMNIST
 from topology.fully import fully_connected
-from topology.random import build as build_random
+from topology.topo_random import build as build_random
 from topology.dclique import build as build_dclique
 from topology.refined_fw import build as build_refined
 from training.dsgd import run_steps_plain_dsgd
@@ -41,9 +41,9 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train, test = load_mnist("./data")
-    test_loader = DataLoader(test, batch_size=126, shuffle=False)
+    test_loader = DataLoader(test, batch_size=256, shuffle=False)
 
-    loaders, node_idx = make_mnist_loaders(train, args.n, args.alpha, args.batch, args.seed)
+    loaders, node_idx = make_mnist_loaders(train, args.n, args.alpha, 32, args.seed)
     labels = np.array(train.targets, dtype=np.int64)
 
     if args.method == "fully":

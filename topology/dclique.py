@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from .random import metropolis_from_adj
+from .topo_random import metropolis_from_adj
 
 def compute_Pi(labels: np.ndarray, node_indices: list[np.ndarray], n_classes: int) -> np.ndarray:
     n = len(node_indices)

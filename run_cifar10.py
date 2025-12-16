@@ -41,7 +41,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train, test = load_cifar10("./data")
-    test_loader = DataLoader(test, batch_size=256, shuffle=False)
+    test_loader = DataLoader(test, batch_size=20, shuffle=False)
 
     loaders, node_idx = make_cifar10_loaders(train, args.n, args.alpha, args.batch, args.seed)
     labels = np.array(train.targets, dtype=np.int64)

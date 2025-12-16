@@ -25,7 +25,7 @@ def main():
     ap.add_argument("--method", required=True, choices=["fully","random","dclique","refined","mydclique"])
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--epochs", type=int, default=100)
-    ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--batch", type=int, default=126)
     ap.add_argument("--lr", type=float, default=0.1)
     ap.add_argument("--alpha", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=42)
@@ -41,7 +41,7 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train, test = load_mnist("./data")
-    test_loader = DataLoader(test, batch_size=256, shuffle=False)
+    test_loader = DataLoader(test, batch_size=126, shuffle=False)
 
     loaders, node_idx = make_mnist_loaders(train, args.n, args.alpha, args.batch, args.seed)
     labels = np.array(train.targets, dtype=np.int64)

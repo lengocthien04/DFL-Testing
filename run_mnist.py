@@ -19,6 +19,7 @@ from training.mydclique_alg import build_agg_selector, run_steps_mydclique
 from training.evaluation import evaluate_models
 from utils.communication import communication_stats_from_adj
 from utils.logging import init_log, log_epoch, write_reach_thresholds
+from topology.dclique import build_clique_neighbors
 
 def main():
     ap = argparse.ArgumentParser()
@@ -62,10 +63,21 @@ def main():
         out, fig = "mnist_dclique_output.txt", "mnist_dclique_accuracy.png"
 
     elif args.method == "mydclique":
-        cliques, A, Wc, Wp = build_dclique(labels, node_idx, 10, args.clique_size, args.swaps, args.seed, device)
+        cliques, A, Wc, Wp = build_dclique(
+            labels, node_idx, 10,
+            args.clique_size, args.swaps, args.seed, device
+        )
         agg_nodes = build_agg_selector(cliques, mode="first")
-        Winter = Wp[agg_nodes][:, agg_nodes]
-        step_runner = lambda models, optims, steps: run_steps_mydclique(models, optims, loaders, cliques, agg_nodes, Winter, device, steps)
+        clique_neighbors = build_clique_neighbors(cliques, A)
+        print("Clique neighbors:")
+        for i, nbs in enumerate(clique_neighbors):
+            print(i, "->", nbs)
+
+        step_runner = lambda models, optims, steps: run_steps_mydclique(
+            models, optims, loaders,
+            cliques, agg_nodes, clique_neighbors,
+            device, steps
+        )
         out, fig = "mnist_mydclique_output.txt", "mnist_mydclique_accuracy.png"
 
     else:

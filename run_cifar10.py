@@ -12,6 +12,7 @@ from models.cifar_models import GNLeNet
 from topology.fully import fully_connected
 from topology.topo_random import build as build_random
 from topology.dclique import build as build_dclique
+from topology.dclique import build_clique_neighbors
 from topology.refined_fw import build as build_refined
 from training.dsgd import run_steps_plain_dsgd
 from training.dcliques_alg import run_steps_dcliques_two_stage
@@ -62,10 +63,21 @@ def main():
         out, fig = "cifar10_dclique_output.txt", "cifar10_dclique_accuracy.png"
 
     elif args.method == "mydclique":
-        cliques, A, Wc, Wp = build_dclique(labels, node_idx, 10, args.clique_size, args.swaps, args.seed, device)
+        cliques, A, Wc, Wp = build_dclique(
+            labels, node_idx, 10,
+            args.clique_size, args.swaps, args.seed, device
+        )
         agg_nodes = build_agg_selector(cliques, mode="first")
-        Winter = Wp[agg_nodes][:, agg_nodes]
-        step_runner = lambda models, optims, steps: run_steps_mydclique(models, optims, loaders, cliques, agg_nodes, Winter, device, steps)
+        clique_neighbors = build_clique_neighbors(cliques, A)
+        print("Clique neighbors:")
+        for i, nbs in enumerate(clique_neighbors):
+            print(i, "->", nbs)
+
+        step_runner = lambda models, optims, steps: run_steps_mydclique(
+            models, optims, loaders,
+            cliques, agg_nodes, clique_neighbors,
+            device, steps
+        )
         out, fig = "cifar10_mydclique_output.txt", "cifar10_mydclique_accuracy.png"
 
     else:

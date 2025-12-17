@@ -1,3 +1,6 @@
-__pycache__/
+training/__pycache__/
+topology/__pycache__/
+
 *.py[cod]
 *$py.class
+data/

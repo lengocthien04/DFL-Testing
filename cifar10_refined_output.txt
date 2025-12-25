@@ -1,8 +1,8 @@
-# avg_degree,18.1
-# msgs_per_node_per_step,18.1
-# total_msgs_per_step,1810.0
+# avg_degree,9.1
+# msgs_per_node_per_step,9.1
+# total_msgs_per_step,910.0
 # steps_per_epoch,25.0
-# total_msgs_per_epoch,45250.0
+# total_msgs_per_epoch,22750.0
 epoch,mean,median,min,max,std
 1,0.14532499999999998,0.14865,0.1,0.2373,0.032177120365253324
 2,0.19121300000000002,0.1835,0.1409,0.2843,0.031228242521794274

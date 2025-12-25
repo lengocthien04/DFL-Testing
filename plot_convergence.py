@@ -6,11 +6,11 @@ METHODS = {
     "fully": "Fully-connected",
     "random": "Random",
     "dclique": "D-Clique",
-    "mydclique": "My D-Clique",
+    "mydclique": "SBDFL",
     "refined": "Refined",
 }
 
-REFERENCE_LINES = [70, 80, 85, 90, 92]
+REFERENCE_LINES = []
 
 MNIST_LOGS = {
     "fully": "mnist_fully_output.txt",

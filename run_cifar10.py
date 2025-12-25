@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
-
+from utils.comm import compute_comm_mydclique
 from data.cifar10 import load_cifar10, make_cifar10_loaders
 from models.cifar_models import GNLeNet
 from topology.fully import fully_connected
@@ -78,6 +78,13 @@ def main():
             cliques, agg_nodes, clique_neighbors,
             device, steps
         )
+        comm = compute_comm_mydclique(
+            cliques=cliques,
+            clique_neighbors=clique_neighbors
+        )
+
+        print(comm)
+
         out, fig = "cifar10_mydclique_output.txt", "cifar10_mydclique_accuracy.png"
 
     else:

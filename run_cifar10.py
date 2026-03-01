@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import argparse, math
+import argparse, math, os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -40,6 +40,8 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    os.makedirs("outputs", exist_ok=True)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train, test = load_cifar10("./data")
     test_loaders = make_cifar10_test_loaders(test, args.n, args.alpha, 256, args.seed)
@@ -51,18 +53,18 @@ def main():
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "cifar10_fully_output.txt", "cifar10_fully_accuracy.png"
+        out, fig = "outputs/cifar10_fully_output.txt", "outputs/cifar10_fully_accuracy.png"
 
     elif args.method == "random":
         A, W = build_random(args.n, args.dmax, args.seed, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "cifar10_random_output.txt", "cifar10_random_accuracy.png"
+        out, fig = "outputs/cifar10_random_output.txt", "outputs/cifar10_random_accuracy.png"
 
     elif args.method == "dclique":
         cliques, A, Wc, Wp = build_dclique(labels, node_idx, n_classes, args.clique_size, args.swaps, args.seed, device)
         # Use plain DSGD with dclique topology (not clique averaging)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
-        out, fig = "cifar10_dclique_output.txt", "cifar10_dclique_accuracy.png"
+        out, fig = "outputs/cifar10_dclique_output.txt", "outputs/cifar10_dclique_accuracy.png"
 
     elif args.method == "mydclique":
         cliques, A, Wc, Wp = build_dclique(
@@ -87,12 +89,12 @@ def main():
 
         print(comm)
 
-        out, fig = "cifar10_mydclique_output.txt", "cifar10_mydclique_accuracy.png"
+        out, fig = "outputs/cifar10_mydclique_output.txt", "outputs/cifar10_mydclique_accuracy.png"
 
     else:
         A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "cifar10_refined_output.txt", "cifar10_refined_accuracy.png"
+        out, fig = "outputs/cifar10_refined_output.txt", "outputs/cifar10_refined_accuracy.png"
 
     comm = communication_stats_from_adj(A)
     steps_per_epoch = max(1, math.ceil(len(train) / (args.n * args.batch)))

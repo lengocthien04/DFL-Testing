@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import argparse, math
+import argparse, math, os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
-from data.mnist import load_mnist, make_mnist_loaders
+from data.mnist import load_mnist, make_mnist_loaders, make_mnist_test_loaders
 from models.mnist_models import LogisticMNIST
 from topology.fully import fully_connected
 from topology.topo_random import build as build_random
@@ -40,29 +40,29 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    os.makedirs("outputs", exist_ok=True)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train, test = load_mnist("./data")
-    test_loader = DataLoader(test, batch_size=256, shuffle=False)
+    test_loaders = make_mnist_test_loaders(test, args.n, args.alpha, 256, args.seed)
 
     loaders, node_idx = make_mnist_loaders(train, args.n, args.alpha, 32, args.seed)
     labels = np.array(train.targets, dtype=np.int64)
-    n_classes = len(np.unique(labels))
-
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "mnist_fully_output.txt", "mnist_fully_accuracy.png"
+        out, fig = "outputs/mnist_fully_output.txt", "outputs/mnist_fully_accuracy.png"
 
     elif args.method == "random":
         A, W = build_random(args.n, args.dmax, args.seed, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "mnist_random_output.txt", "mnist_random_accuracy.png"
+        out, fig = "outputs/mnist_random_output.txt", "outputs/mnist_random_accuracy.png"
 
     elif args.method == "dclique":
         cliques, A, Wc, Wp = build_dclique(labels, node_idx, n_classes, args.clique_size, args.swaps, args.seed, device)
         # Use plain DSGD with dclique topology (not clique averaging)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
-        out, fig = "mnist_dclique_output.txt", "mnist_dclique_accuracy.png"
+        out, fig = "outputs/mnist_dclique_output.txt", "outputs/mnist_dclique_accuracy.png"
 
     elif args.method == "mydclique":
         cliques, A, Wc, Wp = build_dclique(
@@ -80,10 +80,12 @@ def main():
             cliques, agg_nodes, clique_neighbors,
             device, steps
         )
-        out, fig = "mnist_mydclique_output.txt", "mnist_mydclique_accuracy.png"
+        out, fig = "outputs/mnist_mydclique_output.txt", "outputs/mnist_mydclique_accuracy.png"
 
     else:
         A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
+        step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
+        out, fig = "outputs/mnist_refined_output.txt", "outputs/mnist_refined_accuracy.png"_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
         out, fig = "mnist_refined_output.txt", "mnist_refined_accuracy.png"
 
@@ -107,7 +109,7 @@ def main():
 
         for epoch in range(1, args.epochs + 1):
             step_runner(models, optims, steps_per_epoch)
-            stats = evaluate_models(models, test_loader, device)
+            stats = evaluate_models(models, test_loaders, device)
             log_epoch(f, epoch, stats)
 
             for t in targets:

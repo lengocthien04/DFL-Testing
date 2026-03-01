@@ -1,6 +1,11 @@
-training/__pycache__/
-topology/__pycache__/
-
+__pycache__/
 *.py[cod]
 *$py.class
-data/
+*.so
+.Python
+data/cifar-10-batches-py/
+data/MNIST/
+data/*.tar.gz
+outputs/
+*.png
+*.txt

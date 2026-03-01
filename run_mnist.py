@@ -46,6 +46,7 @@ def main():
 
     loaders, node_idx = make_mnist_loaders(train, args.n, args.alpha, 32, args.seed)
     labels = np.array(train.targets, dtype=np.int64)
+    n_classes = len(np.unique(labels))
 
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
@@ -58,14 +59,14 @@ def main():
         out, fig = "mnist_random_output.txt", "mnist_random_accuracy.png"
 
     elif args.method == "dclique":
-        cliques, A, Wc, Wp = build_dclique(labels, node_idx, 10, args.clique_size, args.swaps, args.seed, device)
+        cliques, A, Wc, Wp = build_dclique(labels, node_idx, n_classes, args.clique_size, args.swaps, args.seed, device)
         # Use plain DSGD with dclique topology (not clique averaging)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
         out, fig = "mnist_dclique_output.txt", "mnist_dclique_accuracy.png"
 
     elif args.method == "mydclique":
         cliques, A, Wc, Wp = build_dclique(
-            labels, node_idx, 10,
+            labels, node_idx, n_classes,
             args.clique_size, args.swaps, args.seed, device
         )
         agg_nodes = build_agg_selector(cliques, mode="first")
@@ -82,7 +83,7 @@ def main():
         out, fig = "mnist_mydclique_output.txt", "mnist_mydclique_accuracy.png"
 
     else:
-        A, W = build_refined(labels, node_idx, 10, args.lam, args.fw_iters, device)
+        A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
         out, fig = "mnist_refined_output.txt", "mnist_refined_accuracy.png"
 

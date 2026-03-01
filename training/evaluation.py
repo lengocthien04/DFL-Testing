@@ -3,14 +3,14 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-def evaluate_models(models: list[nn.Module], test_loader: DataLoader, device: torch.device) -> dict:
+def evaluate_models(models: list[nn.Module], test_loaders: list[DataLoader], device: torch.device) -> dict:
     accs = []
-    for m in models:
+    for i, m in enumerate(models):
         m.eval()
         correct = 0
         total = 0
         with torch.no_grad():
-            for x, y in test_loader:
+            for x, y in test_loaders[i]:
                 x, y = x.to(device), y.to(device)
                 pred = m(x).argmax(1)
                 correct += (pred == y).sum().item()

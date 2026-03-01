@@ -7,7 +7,7 @@ import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from utils.comm import compute_comm_mydclique
-from data.cifar10 import load_cifar10, make_cifar10_loaders
+from data.cifar10 import load_cifar10, make_cifar10_loaders, make_cifar10_test_loaders
 from models.cifar_models import GNLeNet
 from topology.fully import fully_connected
 from topology.topo_random import build as build_random
@@ -42,10 +42,11 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train, test = load_cifar10("./data")
-    test_loader = DataLoader(test, batch_size=256, shuffle=False)
+    test_loaders = make_cifar10_test_loaders(test, args.n, args.alpha, 256, args.seed)
 
     loaders, node_idx = make_cifar10_loaders(train, args.n, args.alpha, 32, args.seed)
     labels = np.array(train.targets, dtype=np.int64)
+    n_classes = len(np.unique(labels))
 
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
@@ -58,14 +59,14 @@ def main():
         out, fig = "cifar10_random_output.txt", "cifar10_random_accuracy.png"
 
     elif args.method == "dclique":
-        cliques, A, Wc, Wp = build_dclique(labels, node_idx, 10, args.clique_size, args.swaps, args.seed, device)
+        cliques, A, Wc, Wp = build_dclique(labels, node_idx, n_classes, args.clique_size, args.swaps, args.seed, device)
         # Use plain DSGD with dclique topology (not clique averaging)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
         out, fig = "cifar10_dclique_output.txt", "cifar10_dclique_accuracy.png"
 
     elif args.method == "mydclique":
         cliques, A, Wc, Wp = build_dclique(
-            labels, node_idx, 10,
+            labels, node_idx, n_classes,
             args.clique_size, args.swaps, args.seed, device
         )
         agg_nodes = build_agg_selector(cliques, mode="first")
@@ -89,7 +90,7 @@ def main():
         out, fig = "cifar10_mydclique_output.txt", "cifar10_mydclique_accuracy.png"
 
     else:
-        A, W = build_refined(labels, node_idx, 10, args.lam, args.fw_iters, device)
+        A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
         out, fig = "cifar10_refined_output.txt", "cifar10_refined_accuracy.png"
 
@@ -113,7 +114,7 @@ def main():
 
         for epoch in range(1, args.epochs + 1):
             step_runner(models, optims, steps_per_epoch)
-            stats = evaluate_models(models, test_loader, device)
+            stats = evaluate_models(models, test_loaders, device)
             log_epoch(f, epoch, stats)
 
             for t in targets:

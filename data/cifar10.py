@@ -18,3 +18,12 @@ def make_cifar10_loaders(train_set, n_nodes: int, alpha: float, batch_size: int,
         subset = Subset(train_set, idx)
         loaders.append(DataLoader(subset, batch_size=batch_size, shuffle=True, drop_last=False))
     return loaders, node_idx
+
+def make_cifar10_test_loaders(test_set, n_nodes: int, alpha: float, batch_size: int, seed: int):
+    labels = np.array(test_set.targets, dtype=np.int64)
+    node_idx = dirichlet_partition(labels, n_nodes, alpha, min_size=1, seed=seed)
+    loaders = []
+    for idx in node_idx:
+        subset = Subset(test_set, idx)
+        loaders.append(DataLoader(subset, batch_size=batch_size, shuffle=False, drop_last=False))
+    return loaders

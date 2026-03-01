@@ -59,7 +59,8 @@ def main():
 
     elif args.method == "dclique":
         cliques, A, Wc, Wp = build_dclique(labels, node_idx, 10, args.clique_size, args.swaps, args.seed, device)
-        step_runner = lambda models, optims, steps: run_steps_dcliques_two_stage(models, optims, loaders, Wc, Wp, device, steps)
+        # Use plain DSGD with dclique topology (not clique averaging)
+        step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
         out, fig = "cifar10_dclique_output.txt", "cifar10_dclique_accuracy.png"
 
     elif args.method == "mydclique":

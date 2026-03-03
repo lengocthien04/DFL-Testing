@@ -19,10 +19,11 @@ class HierarchyLevelConfig:
     approach: str
     rounds_per_scope: int
     interval_seconds: int
-    wait_seconds: int
-    max_aggregators: int
-    fanout_count: int
-    apply_policy: str
+    interval_epochs: int = 1  # New field for epoch-based intervals
+    wait_seconds: int = 0
+    max_aggregators: int = 1
+    fanout_count: int = 1
+    apply_policy: str = "interpolate"
     apply_alpha: float = 1.0
 
     def __post_init__(self) -> None:

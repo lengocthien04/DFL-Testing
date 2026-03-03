@@ -142,13 +142,13 @@ def run_steps_hierarchical_mydclique(
     
     for level in hierarchy_state.level_runtimes:
         cfg = level.config
-        if not cfg.enabled or cfg.interval_seconds <= 0:
+        if not cfg.enabled or cfg.interval_epochs <= 0:
             level.next_round_epoch = None
             level.initialized = True
             continue
         if not level.initialized:
-            # Use interval_seconds as epoch interval instead
-            level.next_round_epoch = current_epoch + int(cfg.interval_seconds)
+            # Schedule first aggregation after interval_epochs
+            level.next_round_epoch = current_epoch + cfg.interval_epochs
             level.initialized = True
 
     with torch.no_grad():
@@ -285,10 +285,9 @@ def _run_level_round(
 
 def _schedule_next_round(level: LevelRuntime, current_epoch: int) -> None:
     cfg = level.config
-    if not cfg.enabled or cfg.interval_seconds <= 0:
+    if not cfg.enabled or cfg.interval_epochs <= 0:
         level.next_round_epoch = None
         return
 
-    # Use interval_seconds as epoch interval
-    epoch_interval = int(cfg.interval_seconds)
-    level.next_round_epoch = current_epoch + epoch_interval
+    # Schedule next aggregation based on epoch interval
+    level.next_round_epoch = current_epoch + cfg.interval_epochs

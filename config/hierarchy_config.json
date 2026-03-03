@@ -1,0 +1,32 @@
+{
+  "hierarchy_levels": [
+    {
+      "scope_index": 1,
+      "scope_name": "state",
+      "scope_id": "state_level",
+      "enabled": true,
+      "approach": "ring_star",
+      "rounds_per_scope": 0,
+      "interval_seconds": 300,
+      "wait_seconds": 20,
+      "max_aggregators": 1,
+      "fanout_count": 1,
+      "apply_policy": "interpolate",
+      "apply_alpha": 1.0
+    },
+    {
+      "scope_index": 2,
+      "scope_name": "nation",
+      "scope_id": "nation_level",
+      "enabled": true,
+      "approach": "ring_star",
+      "rounds_per_scope": 0,
+      "interval_seconds": 720,
+      "wait_seconds": 30,
+      "max_aggregators": 1,
+      "fanout_count": 1,
+      "apply_policy": "interpolate",
+      "apply_alpha": 1.0
+    }
+  ]
+}

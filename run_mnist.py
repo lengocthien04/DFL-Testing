@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse, math, os
+from pathlib import Path
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -16,14 +17,16 @@ from topology.refined_fw import build as build_refined
 from training.dsgd import run_steps_plain_dsgd
 from training.dcliques_alg import run_steps_dcliques_two_stage
 from training.mydclique_alg import build_agg_selector, run_steps_mydclique
+from training.hierarchical_mydclique import build_hierarchy_runtime, run_steps_hierarchical_mydclique
 from training.evaluation import evaluate_models
 from utils.communication import communication_stats_from_adj
 from utils.logging import init_log, log_epoch, write_reach_thresholds
 from topology.dclique import build_clique_neighbors
+from utils.hierarchy import build_state_cliques, load_hierarchy_levels, load_scope_instances
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", required=True, choices=["fully","random","dclique","refined","mydclique"])
+    ap.add_argument("--method", required=True, choices=["fully","random","dclique","refined","mydclique","hierarchy"])
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--batch", type=int, default=126)
@@ -35,6 +38,8 @@ def main():
     ap.add_argument("--swaps", type=int, default=5000)
     ap.add_argument("--fw_iters", type=int, default=10)
     ap.add_argument("--lam", type=float, default=0.1)
+    ap.add_argument("--hierarchy_config", type=str, default="config/hierarchy_config.json")
+    ap.add_argument("--nodes_map", type=str, default="config/nodes_map.json")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -48,6 +53,7 @@ def main():
 
     loaders, node_idx = make_mnist_loaders(train, args.n, args.alpha, 32, args.seed)
     labels = np.array(train.targets, dtype=np.int64)
+    n_classes = len(np.unique(labels))
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
@@ -82,12 +88,61 @@ def main():
         )
         out, fig = "outputs/mnist_mydclique_output.txt", "outputs/mnist_mydclique_accuracy.png"
 
+    elif args.method == "hierarchy":
+        hier_cfg_path = Path(args.hierarchy_config)
+        nodes_map_path = Path(args.nodes_map)
+        if not hier_cfg_path.exists():
+            raise FileNotFoundError(f"Hierarchy config not found: {hier_cfg_path}")
+        if not nodes_map_path.exists():
+            raise FileNotFoundError(f"Nodes-map file not found: {nodes_map_path}")
+
+        levels = load_hierarchy_levels(hier_cfg_path)
+        scope_instances = load_scope_instances(nodes_map_path, levels)
+        lowest_index = min(cfg.scope_index for cfg in levels)
+        if lowest_index not in scope_instances:
+            raise ValueError("Nodes map does not define the lowest hierarchy level")
+
+        states = list(scope_instances[lowest_index].values())
+        assigned = {node for state in states for node in state.nodes}
+        expected = set(range(args.n))
+        if assigned != expected:
+            raise ValueError("nodes_map must assign every node id in [0, n)")
+
+        clique_assignments, state_to_cliques = build_state_cliques(
+            labels=labels,
+            node_indices=node_idx,
+            states=states,
+            clique_size=args.clique_size,
+            n_swaps=args.swaps,
+            seed=args.seed,
+        )
+
+        hierarchy_state = build_hierarchy_runtime(
+            level_configs=levels,
+            scope_instances=scope_instances,
+            clique_assignments=clique_assignments,
+            state_to_cliques=state_to_cliques,
+        )
+
+        step_runner = lambda models, optims, steps: run_steps_hierarchical_mydclique(
+            models, optims, loaders,
+            hierarchy_state, device, steps
+        )
+
+        A = np.zeros((args.n, args.n), dtype=np.int32)
+        for assignment in clique_assignments:
+            nodes = assignment["nodes"]
+            for u in nodes:
+                for v in nodes:
+                    if u != v:
+                        A[u, v] = 1
+
+        out, fig = "outputs/mnist_hierarchy_output.txt", "outputs/mnist_hierarchy_accuracy.png"
+
     else:
         A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "outputs/mnist_refined_output.txt", "outputs/mnist_refined_accuracy.png"_iters, device)
-        step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "mnist_refined_output.txt", "mnist_refined_accuracy.png"
+        out, fig = "outputs/mnist_refined_output.txt", "outputs/mnist_refined_accuracy.png"
 
     comm = communication_stats_from_adj(A)
     steps_per_epoch = max(1, math.ceil(len(train) / (args.n * args.batch)))

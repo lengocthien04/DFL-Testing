@@ -58,18 +58,18 @@ def main():
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "outputs/cifar10_fully_output.txt", "outputs/cifar10_fully_accuracy.png"
+        out, fig = f"outputs/cifar10_fully_n{args.n}_output.txt", f"outputs/cifar10_fully_n{args.n}_accuracy.png"
 
     elif args.method == "random":
         A, W = build_random(args.n, args.dmax, args.seed, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "outputs/cifar10_random_output.txt", "outputs/cifar10_random_accuracy.png"
+        out, fig = f"outputs/cifar10_random_n{args.n}_dmax{args.dmax}_output.txt", f"outputs/cifar10_random_n{args.n}_dmax{args.dmax}_accuracy.png"
 
     elif args.method == "dclique":
         cliques, A, Wc, Wp = build_dclique(labels, node_idx, n_classes, args.clique_size, args.swaps, args.seed, device)
         # Use plain DSGD with dclique topology (not clique averaging)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
-        out, fig = "outputs/cifar10_dclique_output.txt", "outputs/cifar10_dclique_accuracy.png"
+        out, fig = f"outputs/cifar10_dclique_n{args.n}_c{args.clique_size}_output.txt", f"outputs/cifar10_dclique_n{args.n}_c{args.clique_size}_accuracy.png"
 
     elif args.method == "mydclique":
         cliques, A, Wc, Wp = build_dclique(
@@ -94,7 +94,7 @@ def main():
 
         print(comm)
 
-        out, fig = "outputs/cifar10_mydclique_output.txt", "outputs/cifar10_mydclique_accuracy.png"
+        out, fig = f"outputs/cifar10_mydclique_n{args.n}_c{args.clique_size}_output.txt", f"outputs/cifar10_mydclique_n{args.n}_c{args.clique_size}_accuracy.png"
 
     elif args.method == "hierarchy":
         hier_cfg_path = Path(args.hierarchy_config)
@@ -145,18 +145,26 @@ def main():
                     if u != v:
                         A[u, v] = 1
 
-        out, fig = "outputs/cifar10_hierarchy_output.txt", "outputs/cifar10_hierarchy_accuracy.png"
+        out, fig = f"outputs/cifar10_hierarchy_n{args.n}_c{args.clique_size}_output.txt", f"outputs/cifar10_hierarchy_n{args.n}_c{args.clique_size}_accuracy.png"
 
     else:
         A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = "outputs/cifar10_refined_output.txt", "outputs/cifar10_refined_accuracy.png"
+        out, fig = f"outputs/cifar10_refined_n{args.n}_output.txt", f"outputs/cifar10_refined_n{args.n}_accuracy.png"
 
     comm = communication_stats_from_adj(A)
     steps_per_epoch = max(1, math.ceil(len(train) / (args.n * args.batch)))
     header = dict(comm)
     header["steps_per_epoch"] = float(steps_per_epoch)
     header["total_msgs_per_epoch"] = header["total_msgs_per_step"] * steps_per_epoch
+    header["n_nodes"] = float(args.n)
+    header["learning_rate"] = float(args.lr)
+    header["batch_size"] = float(args.batch)
+    header["alpha"] = float(args.alpha)
+    if args.method in ["random"]:
+        header["dmax"] = float(args.dmax)
+    if args.method in ["dclique", "mydclique", "hierarchy"]:
+        header["clique_size"] = float(args.clique_size)
 
     models = [GNLeNet().to(device) for _ in range(args.n)]
     optims = [torch.optim.SGD(m.parameters(), lr=args.lr) for m in models]

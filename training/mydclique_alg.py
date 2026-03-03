@@ -24,10 +24,10 @@ def run_steps_mydclique(
 ):
     """
     MyD-Clique training step:
-    1. Local SGD on all nodes
-    2. Intra-clique averaging
-    3. Inter-clique aggregation (aggregators only, topology-aware)
-    4. Broadcast aggregator model back to clique
+    1. Local SGD on all nodes (all steps)
+    2. Intra-clique averaging (once at end)
+    3. Inter-clique aggregation (once at end)
+    4. Broadcast aggregator model back to clique (once at end)
     """
 
     iters = [iter(ld) for ld in loaders]
@@ -35,7 +35,6 @@ def run_steps_mydclique(
     agg_nodes = list(agg_nodes)
 
     for _ in range(steps):
-
         # --------------------------------------------------
         # (1) Local SGD
         # --------------------------------------------------
@@ -47,42 +46,43 @@ def run_steps_mydclique(
                 batch = next(iters[i])
             local_sgd_step(models[i], optims[i], batch, device)
 
-        with torch.no_grad():
-            X = get_param_matrix(models).to(device)
+    # All aggregation happens once at the end of all steps (end of epoch)
+    with torch.no_grad():
+        X = get_param_matrix(models).to(device)
 
-            # --------------------------------------------------
-            # (2) Intra-clique averaging
-            # --------------------------------------------------
-            for clique in cliques:
-                idx = torch.tensor(clique, device=device, dtype=torch.long)
-                mean_vec = X.index_select(0, idx).mean(dim=0)
-                X[idx] = mean_vec
+        # --------------------------------------------------
+        # (2) Intra-clique averaging
+        # --------------------------------------------------
+        for clique in cliques:
+            idx = torch.tensor(clique, device=device, dtype=torch.long)
+            mean_vec = X.index_select(0, idx).mean(dim=0)
+            X[idx] = mean_vec
 
-            # --------------------------------------------------
-            # (3) Inter-clique aggregation (aggregators ONLY)
-            #     Each aggregator averages with neighbor cliques
-            # --------------------------------------------------
-            new_agg_values = {}
+        # --------------------------------------------------
+        # (3) Inter-clique aggregation (aggregators ONLY)
+        #     Each aggregator averages with neighbor cliques
+        # --------------------------------------------------
+        new_agg_values = {}
 
-            for c_idx, agg in enumerate(agg_nodes):
-                neighbors = clique_neighbors[c_idx]
+        for c_idx, agg in enumerate(agg_nodes):
+            neighbors = clique_neighbors[c_idx]
 
-                # self + neighbor aggregators
-                src_nodes = [agg] + [agg_nodes[nc] for nc in neighbors]
-                idx = torch.tensor(src_nodes, device=device, dtype=torch.long)
+            # self + neighbor aggregators
+            src_nodes = [agg] + [agg_nodes[nc] for nc in neighbors]
+            idx = torch.tensor(src_nodes, device=device, dtype=torch.long)
 
-                new_agg_values[agg] = X.index_select(0, idx).mean(dim=0)
+            new_agg_values[agg] = X.index_select(0, idx).mean(dim=0)
 
-            # apply aggregator updates
-            for agg, vec in new_agg_values.items():
-                X[agg] = vec
+        # apply aggregator updates
+        for agg, vec in new_agg_values.items():
+            X[agg] = vec
 
-            # --------------------------------------------------
-            # (4) Broadcast aggregator model back to clique
-            # --------------------------------------------------
-            for c_idx, clique in enumerate(cliques):
-                agg = agg_nodes[c_idx]
-                idx = torch.tensor(clique, device=device, dtype=torch.long)
-                X[idx] = X[agg].clone()
+        # --------------------------------------------------
+        # (4) Broadcast aggregator model back to clique
+        # --------------------------------------------------
+        for c_idx, clique in enumerate(cliques):
+            agg = agg_nodes[c_idx]
+            idx = torch.tensor(clique, device=device, dtype=torch.long)
+            X[idx] = X[agg].clone()
 
-            set_param_matrix(models, X)
+        set_param_matrix(models, X)

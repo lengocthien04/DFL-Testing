@@ -124,9 +124,9 @@ def main():
             state_to_cliques=state_to_cliques,
         )
 
-        step_runner = lambda models, optims, steps: run_steps_hierarchical_mydclique(
+        step_runner = lambda models, optims, steps, epoch=1: run_steps_hierarchical_mydclique(
             models, optims, loaders,
-            hierarchy_state, device, steps
+            hierarchy_state, device, steps, current_epoch=epoch
         )
 
         A = np.zeros((args.n, args.n), dtype=np.int32)
@@ -163,7 +163,10 @@ def main():
         init_log(f, header)
 
         for epoch in range(1, args.epochs + 1):
-            step_runner(models, optims, steps_per_epoch)
+            if args.method == "hierarchy":
+                step_runner(models, optims, steps_per_epoch, epoch)
+            else:
+                step_runner(models, optims, steps_per_epoch)
             stats = evaluate_models(models, test_loaders, device)
             log_epoch(f, epoch, stats)
 

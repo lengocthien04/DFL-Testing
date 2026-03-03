@@ -50,7 +50,8 @@ class LevelRuntime:
     scope_index: int
     scopes: Dict[str, ScopeRuntime]
     child_level_index: Optional[int]
-    next_round_time: Optional[float] = None
+    next_round_epoch: Optional[int] = None
+    last_triggered_epoch: int = -1
     initialized: bool = False
 
 
@@ -132,20 +133,22 @@ def run_steps_hierarchical_mydclique(
     hierarchy_state: HierarchyRuntimeState,
     device,
     steps: int,
+    current_epoch: int = 0,
 ) -> None:
     """
-    Execute local clique rounds interleaved with scheduled high-level aggregations.
+    Execute local clique rounds interleaved with epoch-based high-level aggregations.
     """
     iters = [iter(ld) for ld in loaders]
-    start_time = time.monotonic()
+    
     for level in hierarchy_state.level_runtimes:
         cfg = level.config
         if not cfg.enabled or cfg.interval_seconds <= 0:
-            level.next_round_time = None
+            level.next_round_epoch = None
             level.initialized = True
             continue
         if not level.initialized:
-            level.next_round_time = start_time + cfg.interval_seconds
+            # Use interval_seconds as epoch interval instead
+            level.next_round_epoch = current_epoch + int(cfg.interval_seconds)
             level.initialized = True
 
     with torch.no_grad():
@@ -154,6 +157,7 @@ def run_steps_hierarchical_mydclique(
             X=X_bootstrap,
             hierarchy_state=hierarchy_state,
             device=device,
+            current_epoch=current_epoch,
         )
         if changed:
             set_param_matrix(models, X_bootstrap)
@@ -179,38 +183,46 @@ def run_steps_hierarchical_mydclique(
 
             set_param_matrix(models, X)
 
-            X, updated = _process_high_levels(
-                X=X,
-                hierarchy_state=hierarchy_state,
-                device=device,
-            )
-            if updated:
-                set_param_matrix(models, X)
+    # Check for high-level aggregations at end of epoch
+    with torch.no_grad():
+        X = get_param_matrix(models).to(device)
+        X, updated = _process_high_levels(
+            X=X,
+            hierarchy_state=hierarchy_state,
+            device=device,
+            current_epoch=current_epoch,
+        )
+        if updated:
+            set_param_matrix(models, X)
 
 
 def _process_high_levels(
     X: torch.Tensor,
     hierarchy_state: HierarchyRuntimeState,
     device,
+    current_epoch: int,
 ) -> Tuple[torch.Tensor, bool]:
     """
-    Run all due high-level rounds before the next clique round begins.
+    Run all due high-level rounds based on epoch intervals.
     """
     updated = False
-    while True:
-        now = time.monotonic()
-        due_levels = [
-            level
-            for level in hierarchy_state.level_runtimes
-            if level.next_round_time is not None and now >= level.next_round_time
-        ]
-        if not due_levels:
-            break
-        due_levels.sort(key=lambda lvl: lvl.scope_index)
-        for level in due_levels:
-            X = _run_level_round(level, hierarchy_state, X, device)
-            updated = True
-            _schedule_next_round(level, now)
+    due_levels = [
+        level
+        for level in hierarchy_state.level_runtimes
+        if level.next_round_epoch is not None 
+        and current_epoch >= level.next_round_epoch
+        and level.last_triggered_epoch < current_epoch
+    ]
+    
+    if not due_levels:
+        return X, updated
+        
+    due_levels.sort(key=lambda lvl: lvl.scope_index)
+    for level in due_levels:
+        X = _run_level_round(level, hierarchy_state, X, device)
+        updated = True
+        level.last_triggered_epoch = current_epoch
+        _schedule_next_round(level, current_epoch)
 
     return X, updated
 
@@ -271,13 +283,12 @@ def _run_level_round(
     return X
 
 
-def _schedule_next_round(level: LevelRuntime, reference_time: float) -> None:
+def _schedule_next_round(level: LevelRuntime, current_epoch: int) -> None:
     cfg = level.config
     if not cfg.enabled or cfg.interval_seconds <= 0:
-        level.next_round_time = None
+        level.next_round_epoch = None
         return
 
-    next_time = (level.next_round_time or reference_time) + cfg.interval_seconds
-    while next_time <= reference_time:
-        next_time += cfg.interval_seconds
-    level.next_round_time = next_time
+    # Use interval_seconds as epoch interval
+    epoch_interval = int(cfg.interval_seconds)
+    level.next_round_epoch = current_epoch + epoch_interval

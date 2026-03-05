@@ -60,18 +60,18 @@ def main():
     if args.method == "fully":
         A, W = fully_connected(args.n, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = f"outputs/cifar10_fully_n{args.n}_output.txt", f"outputs/cifar10_fully_n{args.n}_accuracy.png"
+        out, fig = f"outputs/cifar10_fully_n{args.n}_alpha{args.alpha}_output.txt", f"outputs/cifar10_fully_n{args.n}_alpha{args.alpha}_accuracy.png"
 
     elif args.method == "random":
         A, W = build_random(args.n, args.dmax, args.seed, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = f"outputs/cifar10_random_n{args.n}_dmax{args.dmax}_output.txt", f"outputs/cifar10_random_n{args.n}_dmax{args.dmax}_accuracy.png"
+        out, fig = f"outputs/cifar10_random_n{args.n}_dmax{args.dmax}_alpha{args.alpha}_output.txt", f"outputs/cifar10_random_n{args.n}_dmax{args.dmax}_alpha{args.alpha}_accuracy.png"
 
     elif args.method == "dclique":
         cliques, A, Wc, Wp = build_dclique(labels, node_idx, n_classes, args.clique_size, args.swaps, args.seed, device)
         # Use plain DSGD with dclique topology (not clique averaging)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, Wp, device, steps)
-        out, fig = f"outputs/cifar10_dclique_n{args.n}_c{args.clique_size}_output.txt", f"outputs/cifar10_dclique_n{args.n}_c{args.clique_size}_accuracy.png"
+        out, fig = f"outputs/cifar10_dclique_n{args.n}_c{args.clique_size}_alpha{args.alpha}_output.txt", f"outputs/cifar10_dclique_n{args.n}_c{args.clique_size}_alpha{args.alpha}_accuracy.png"
 
     elif args.method == "mydclique":
         cliques, A, Wc, Wp = build_dclique(
@@ -143,7 +143,7 @@ def main():
                     if u != v:
                         A[u, v] = 1
 
-        out, fig = f"outputs/cifar10_hierarchy_n{args.n}_c{args.clique_size}_output.txt", f"outputs/cifar10_hierarchy_n{args.n}_c{args.clique_size}_accuracy.png"
+        out, fig = f"outputs/cifar10_hierarchy_n{args.n}_c{args.clique_size}_alpha{args.alpha}_output.txt", f"outputs/cifar10_hierarchy_n{args.n}_c{args.clique_size}_alpha{args.alpha}_accuracy.png"
 
     elif args.method == "hierarchy_simple":
         hier_cfg_path = Path(args.hierarchy_config)
@@ -190,12 +190,12 @@ def main():
                     if u != v:
                         A[u, v] = 1
 
-        out, fig = f"outputs/cifar10_hierarchy_simple_n{args.n}_c{args.clique_size}_output.txt", f"outputs/cifar10_hierarchy_simple_n{args.n}_c{args.clique_size}_accuracy.png"
+        out, fig = f"outputs/cifar10_hierarchy_simple_n{args.n}_c{args.clique_size}_alpha{args.alpha}_output.txt", f"outputs/cifar10_hierarchy_simple_n{args.n}_c{args.clique_size}_alpha{args.alpha}_accuracy.png"
 
     else:
         A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
-        out, fig = f"outputs/cifar10_refined_n{args.n}_output.txt", f"outputs/cifar10_refined_n{args.n}_accuracy.png"
+        out, fig = f"outputs/cifar10_refined_n{args.n}_alpha{args.alpha}_output.txt", f"outputs/cifar10_refined_n{args.n}_alpha{args.alpha}_accuracy.png"
 
     comm = communication_stats_from_adj(A)
     steps_per_epoch = max(1, math.ceil(len(train) / (args.n * args.batch)))

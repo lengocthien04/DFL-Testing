@@ -18,15 +18,17 @@ from training.dsgd import run_steps_plain_dsgd
 from training.dcliques_alg import run_steps_dcliques_two_stage
 from training.mydclique_alg import build_agg_selector, run_steps_mydclique
 from training.hierarchical_mydclique import build_hierarchy_runtime, run_steps_hierarchical_mydclique
+from training.hierarchical_simple import run_steps_hierarchical_simple
 from training.evaluation import evaluate_models
 from utils.communication import communication_stats_from_adj
 from utils.logging import init_log, log_epoch, write_reach_thresholds
 from topology.dclique import build_clique_neighbors
 from utils.hierarchy import build_state_cliques, load_hierarchy_levels, load_scope_instances
+from utils.dynamic_hierarchy import generate_two_state_hierarchy
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", required=True, choices=["fully","random","dclique","refined","mydclique","hierarchy"])
+    ap.add_argument("--method", required=True, choices=["fully","random","dclique","refined","mydclique","hierarchy","hierarchy_simple"])
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--batch", type=int, default=126)
@@ -90,23 +92,19 @@ def main():
 
     elif args.method == "hierarchy":
         hier_cfg_path = Path(args.hierarchy_config)
-        nodes_map_path = Path(args.nodes_map)
         if not hier_cfg_path.exists():
             raise FileNotFoundError(f"Hierarchy config not found: {hier_cfg_path}")
-        if not nodes_map_path.exists():
-            raise FileNotFoundError(f"Nodes-map file not found: {nodes_map_path}")
 
         levels = load_hierarchy_levels(hier_cfg_path)
-        scope_instances = load_scope_instances(nodes_map_path, levels)
+        
+        # Generate dynamic 2-state hierarchy based on --n
+        scope_instances = generate_two_state_hierarchy(args.n)
+        
         lowest_index = min(cfg.scope_index for cfg in levels)
         if lowest_index not in scope_instances:
-            raise ValueError("Nodes map does not define the lowest hierarchy level")
+            raise ValueError("Generated hierarchy does not have the lowest level")
 
         states = list(scope_instances[lowest_index].values())
-        assigned = {node for state in states for node in state.nodes}
-        expected = set(range(args.n))
-        if assigned != expected:
-            raise ValueError("nodes_map must assign every node id in [0, n)")
 
         clique_assignments, state_to_cliques = build_state_cliques(
             labels=labels,
@@ -138,6 +136,53 @@ def main():
                         A[u, v] = 1
 
         out, fig = f"outputs/mnist_hierarchy_n{args.n}_c{args.clique_size}_output.txt", f"outputs/mnist_hierarchy_n{args.n}_c{args.clique_size}_accuracy.png"
+
+    elif args.method == "hierarchy_simple":
+        hier_cfg_path = Path(args.hierarchy_config)
+        if not hier_cfg_path.exists():
+            raise FileNotFoundError(f"Hierarchy config not found: {hier_cfg_path}")
+
+        levels = load_hierarchy_levels(hier_cfg_path)
+        
+        # Generate dynamic 2-state hierarchy based on --n
+        scope_instances = generate_two_state_hierarchy(args.n)
+        
+        lowest_index = min(cfg.scope_index for cfg in levels)
+        if lowest_index not in scope_instances:
+            raise ValueError("Generated hierarchy does not have the lowest level")
+
+        states_list = list(scope_instances[lowest_index].values())
+
+        clique_assignments, state_to_cliques = build_state_cliques(
+            labels=labels,
+            node_indices=node_idx,
+            states=states_list,
+            clique_size=args.clique_size,
+            n_swaps=args.swaps,
+            seed=args.seed,
+        )
+
+        # Extract cliques and states as simple lists
+        cliques = [assignment["nodes"] for assignment in clique_assignments]
+        states = [state.nodes for state in states_list]
+
+        step_runner = lambda models, optims, steps, epoch=1: run_steps_hierarchical_simple(
+            models, optims, loaders,
+            cliques, states, device, steps,
+            current_epoch=epoch,
+            state_interval=1,
+            nation_interval=1,
+        )
+
+        # Build adjacency for communication stats
+        A = np.zeros((args.n, args.n), dtype=np.int32)
+        for clique in cliques:
+            for u in clique:
+                for v in clique:
+                    if u != v:
+                        A[u, v] = 1
+
+        out, fig = f"outputs/mnist_hierarchy_simple_n{args.n}_c{args.clique_size}_output.txt", f"outputs/mnist_hierarchy_simple_n{args.n}_c{args.clique_size}_accuracy.png"
 
     else:
         A, W = build_refined(labels, node_idx, n_classes, args.lam, args.fw_iters, device)
@@ -171,7 +216,7 @@ def main():
         init_log(f, header)
 
         for epoch in range(1, args.epochs + 1):
-            if args.method == "hierarchy":
+            if args.method == "hierarchy" or args.method == "hierarchy_simple":
                 step_runner(models, optims, steps_per_epoch, epoch)
             else:
                 step_runner(models, optims, steps_per_epoch)

@@ -26,8 +26,8 @@ def run_steps_plain_dsgd(models, optims, loaders, W: torch.Tensor, device: torch
                 batch = next(iters[i])
             local_sgd_step(models[i], optims[i], batch, device)
 
-    # Gossip averaging happens once at the end of all steps (end of epoch)
+    # Gossip averaging at the end of epoch (nodes average with neighbors only via W matrix)
     with torch.no_grad():
         X = get_param_matrix(models).to(device)
-        X = W @ X
+        X = W @ X  # W is mixing matrix - only neighbors have non-zero weights
         set_param_matrix(models, X)

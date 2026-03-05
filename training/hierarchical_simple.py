@@ -28,6 +28,7 @@ def run_steps_hierarchical_simple(
 ) -> None:
     """
     Execute hierarchical training with clique → state → nation aggregation.
+    All aggregations happen at the END of epoch (after all training steps).
     
     Args:
         models: List of model instances for each node
@@ -43,9 +44,8 @@ def run_steps_hierarchical_simple(
     """
     iters = [iter(ld) for ld in loaders]
     
-    # Training steps
+    # Training steps (local SGD only, no averaging during steps)
     for _ in range(steps):
-        # 1. Local SGD in each node
         for idx, model in enumerate(models):
             try:
                 batch = next(iters[idx])
@@ -53,25 +53,21 @@ def run_steps_hierarchical_simple(
                 iters[idx] = iter(loaders[idx])
                 batch = next(iters[idx])
             local_sgd_step(model, optims[idx], batch, device)
-        
-        # 2. Clique averaging (after every step)
-        with torch.no_grad():
-            X = get_param_matrix(models).to(device)
-            
-            for clique in cliques:
-                if len(clique) == 0:
-                    continue
-                idx = torch.tensor(clique, device=device, dtype=torch.long)
-                mean_vec = X.index_select(0, idx).mean(dim=0)
-                X[idx] = mean_vec
-            
-            set_param_matrix(models, X)
     
-    # 3. State aggregation (at end of epoch if due)
-    if current_epoch > 0 and state_interval > 0 and current_epoch % state_interval == 0:
-        with torch.no_grad():
-            X = get_param_matrix(models).to(device)
-            
+    # All aggregations happen at END of epoch
+    with torch.no_grad():
+        X = get_param_matrix(models).to(device)
+        
+        # 1. Clique averaging
+        for clique in cliques:
+            if len(clique) == 0:
+                continue
+            idx = torch.tensor(clique, device=device, dtype=torch.long)
+            mean_vec = X.index_select(0, idx).mean(dim=0)
+            X[idx] = mean_vec
+        
+        # 2. State aggregation (if due)
+        if current_epoch > 0 and state_interval > 0 and current_epoch % state_interval == 0:
             # Build clique-to-state mapping
             clique_to_state = {}
             for state_idx, state_nodes in enumerate(states):
@@ -107,14 +103,9 @@ def run_steps_hierarchical_simple(
                 # Broadcast to all nodes in the state
                 state_idx_tensor = torch.tensor(state_nodes, device=device, dtype=torch.long)
                 X[state_idx_tensor] = state_avg.unsqueeze(0).expand(len(state_nodes), -1)
-            
-            set_param_matrix(models, X)
-    
-    # 4. Nation aggregation (at end of epoch if due)
-    if current_epoch > 0 and nation_interval > 0 and current_epoch % nation_interval == 0:
-        with torch.no_grad():
-            X = get_param_matrix(models).to(device)
-            
+        
+        # 3. Nation aggregation (if due)
+        if current_epoch > 0 and nation_interval > 0 and current_epoch % nation_interval == 0:
             # Take one representative from each state
             state_representatives = []
             for state_nodes in states:
@@ -129,5 +120,5 @@ def run_steps_hierarchical_simple(
                 # Broadcast to all nodes
                 n_nodes = len(models)
                 X[:] = nation_avg.unsqueeze(0).expand(n_nodes, -1)
-                
-                set_param_matrix(models, X)
+        
+        set_param_matrix(models, X)

@@ -142,13 +142,13 @@ def run_steps_hierarchical_mydclique(
     
     for level in hierarchy_state.level_runtimes:
         cfg = level.config
-        if not cfg.enabled or cfg.interval_epochs <= 0:
+        if not cfg.enabled or cfg.interval_seconds <= 0:
             level.next_round_epoch = None
             level.initialized = True
             continue
         if not level.initialized:
-            # Schedule first aggregation after interval_epochs
-            level.next_round_epoch = current_epoch + cfg.interval_epochs
+            # Use interval_seconds as epoch interval
+            level.next_round_epoch = current_epoch + int(cfg.interval_seconds)
             level.initialized = True
 
     with torch.no_grad():
@@ -172,16 +172,17 @@ def run_steps_hierarchical_mydclique(
                 batch = next(iters[idx])
             local_sgd_step(model, optims[idx], batch, device)
 
-        with torch.no_grad():
-            X = get_param_matrix(models).to(device)
+    # All aggregations at end of epoch
+    with torch.no_grad():
+        X = get_param_matrix(models).to(device)
 
-            # Intra-clique averaging
-            for clique in hierarchy_state.cliques.values():
-                idx = torch.tensor(clique.nodes, device=device, dtype=torch.long)
-                mean_vec = X.index_select(0, idx).mean(dim=0)
-                X[idx] = mean_vec
+        # Intra-clique averaging
+        for clique in hierarchy_state.cliques.values():
+            idx = torch.tensor(clique.nodes, device=device, dtype=torch.long)
+            mean_vec = X.index_select(0, idx).mean(dim=0)
+            X[idx] = mean_vec
 
-            set_param_matrix(models, X)
+        set_param_matrix(models, X)
 
     # Check for high-level aggregations at end of epoch
     with torch.no_grad():

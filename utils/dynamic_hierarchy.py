@@ -28,12 +28,16 @@ def generate_two_state_hierarchy(n_nodes: int) -> Dict[int, Dict[str, ScopeInsta
     
     # Create state instances (scope_index=1 for state level)
     state_alpha = ScopeInstance(
+        level_index=1,
+        level_name="state",
         scope_id="state_alpha",
         nodes=state_alpha_nodes,
         child_ids=[],
     )
     
     state_beta = ScopeInstance(
+        level_index=1,
+        level_name="state",
         scope_id="state_beta",
         nodes=state_beta_nodes,
         child_ids=[],
@@ -41,6 +45,8 @@ def generate_two_state_hierarchy(n_nodes: int) -> Dict[int, Dict[str, ScopeInsta
     
     # Create nation instance (scope_index=2 for nation level)
     nation = ScopeInstance(
+        level_index=2,
+        level_name="nation",
         scope_id="nation_0",
         nodes=list(range(n_nodes)),
         child_ids=["state_alpha", "state_beta"],

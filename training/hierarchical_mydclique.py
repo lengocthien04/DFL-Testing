@@ -1,169 +1,102 @@
+"""
+Hierarchical training with bridge-based aggregation:
+1. Local SGD in each node
+2. Clique averaging (nodes in same clique share models)
+3. State aggregation (only aggregate cliques connected by bridges within state)
+4. Nation aggregation (aggregate states)
+"""
+
 from __future__ import annotations
-
-import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import List, Dict, Set, Any
 import torch
-
+import torch.nn as nn
+import numpy as np
 from .dsgd import local_sgd_step
 from .vector import get_param_matrix, set_param_matrix
-from utils.hierarchy import HierarchyLevelConfig, ScopeInstance
-
-
-@dataclass
-class CliqueRuntime:
-    clique_id: str
-    nodes: List[int]
-    parent_state_id: str
-    fanout_cursor: int = 0
-
-    def select_fanout(self) -> int:
-        node = self.nodes[self.fanout_cursor % len(self.nodes)]
-        self.fanout_cursor += 1
-        return node
-
-
-@dataclass
-class ScopeRuntime:
-    instance: ScopeInstance
-    config: HierarchyLevelConfig
-    aggregator_cursor: int = 0
-    fanout_cursor: int = 0
-    latest_model: Optional[torch.Tensor] = None
-    child_cliques: List[str] = field(default_factory=list)
-
-    def select_aggregator(self) -> int:
-        node = self.instance.nodes[self.aggregator_cursor % len(self.instance.nodes)]
-        self.aggregator_cursor += 1
-        return node
-
-    def select_fanout_node(self) -> int:
-        node = self.instance.nodes[self.fanout_cursor % len(self.instance.nodes)]
-        self.fanout_cursor += 1
-        return node
-
-
-@dataclass
-class LevelRuntime:
-    config: HierarchyLevelConfig
-    scope_index: int
-    scopes: Dict[str, ScopeRuntime]
-    child_level_index: Optional[int]
-    next_round_epoch: Optional[int] = None
-    last_triggered_epoch: int = -1
-    initialized: bool = False
-
-
-@dataclass
-class HierarchyRuntimeState:
-    cliques: Dict[str, CliqueRuntime]
-    level_runtimes: List[LevelRuntime]
-    scopes_by_level: Dict[int, Dict[str, ScopeRuntime]]
-    lowest_level_index: int
 
 
 def build_hierarchy_runtime(
-    level_configs: List[HierarchyLevelConfig],
-    scope_instances: Dict[int, Dict[str, ScopeInstance]],
+    level_configs,
+    scope_instances,
     clique_assignments: List[Dict[str, Any]],
     state_to_cliques: Dict[str, List[str]],
-) -> HierarchyRuntimeState:
-    if not level_configs:
-        raise ValueError("Hierarchy requires at least one high-level scope configuration")
+):
+    """
+    Simplified: Just return the data structures needed for bridge-based aggregation.
+    """
+    return {
+        'clique_assignments': clique_assignments,
+        'state_to_cliques': state_to_cliques,
+        'scope_instances': scope_instances,
+    }
 
-    levels_sorted = sorted(level_configs, key=lambda cfg: cfg.scope_index)
-    lowest_index = levels_sorted[0].scope_index
 
-    # Build clique runtimes
-    cliques: Dict[str, CliqueRuntime] = {}
-    for assignment in clique_assignments:
-        clique_id = assignment["clique_id"]
-        nodes = assignment["nodes"]
-        state_id = assignment["state_id"]
-        if not nodes:
-            continue
-        cliques[clique_id] = CliqueRuntime(
-            clique_id=clique_id,
-            nodes=nodes,
-            parent_state_id=state_id,
-        )
-
-    scopes_by_level: Dict[int, Dict[str, ScopeRuntime]] = {}
-    for cfg in levels_sorted:
-        instances = scope_instances.get(cfg.scope_index)
-        if instances is None:
-            raise ValueError(f"No nodes-map entries for level '{cfg.scope_name}'")
-        scope_runtime_map: Dict[str, ScopeRuntime] = {}
-        for scope_id, instance in instances.items():
-            runtime = ScopeRuntime(instance=instance, config=cfg)
-            if cfg.scope_index == lowest_index:
-                runtime.child_cliques = state_to_cliques.get(scope_id, [])
-            scope_runtime_map[scope_id] = runtime
-        scopes_by_level[cfg.scope_index] = scope_runtime_map
-
-    child_indices: Dict[int, Optional[int]] = {}
-    for idx, cfg in enumerate(levels_sorted):
-        child_indices[cfg.scope_index] = (
-            levels_sorted[idx - 1].scope_index if idx > 0 else None
-        )
-
-    level_runtimes = [
-        LevelRuntime(
-            config=cfg,
-            scope_index=cfg.scope_index,
-            scopes=scopes_by_level[cfg.scope_index],
-            child_level_index=child_indices[cfg.scope_index],
-        )
-        for cfg in levels_sorted
-    ]
-
-    return HierarchyRuntimeState(
-        cliques=cliques,
-        level_runtimes=level_runtimes,
-        scopes_by_level=scopes_by_level,
-        lowest_level_index=lowest_index,
-    )
+def find_bridge_connections(cliques: List[List[int]], adjacency: np.ndarray) -> Dict[int, Set[int]]:
+    """
+    Find which cliques are connected via bridges (inter-clique edges).
+    
+    Args:
+        cliques: List of cliques (each is a list of node IDs)
+        adjacency: Adjacency matrix (n_nodes x n_nodes)
+        
+    Returns:
+        Dict mapping clique_idx to set of connected clique indices
+    """
+    connections = {i: set() for i in range(len(cliques))}
+    
+    for i, clique_a in enumerate(cliques):
+        for j, clique_b in enumerate(cliques):
+            if i >= j:
+                continue
+            
+            # Check if there's any edge between clique_a and clique_b
+            has_bridge = False
+            for node_a in clique_a:
+                for node_b in clique_b:
+                    if adjacency[node_a, node_b] > 0 or adjacency[node_b, node_a] > 0:
+                        has_bridge = True
+                        break
+                if has_bridge:
+                    break
+            
+            if has_bridge:
+                connections[i].add(j)
+                connections[j].add(i)
+    
+    return connections
 
 
 def run_steps_hierarchical_mydclique(
-    models,
-    optims,
-    loaders,
-    hierarchy_state: HierarchyRuntimeState,
-    device,
+    models: List[nn.Module],
+    optims: List[torch.optim.Optimizer],
+    loaders: List,
+    hierarchy_state: Dict,
+    device: torch.device,
     steps: int,
     current_epoch: int = 0,
+    adjacency: np.ndarray = None,
+    state_interval: int = 1,
+    nation_interval: int = 1,
 ) -> None:
     """
-    Execute local clique rounds interleaved with epoch-based high-level aggregations.
+    Execute hierarchical training with bridge-based state aggregation.
+    
+    Args:
+        models: List of model instances for each node
+        optims: List of optimizers for each node
+        loaders: List of data loaders for each node
+        hierarchy_state: Dict containing clique_assignments, state_to_cliques, scope_instances
+        device: PyTorch device
+        steps: Number of training steps per epoch
+        current_epoch: Current epoch number
+        adjacency: Adjacency matrix to determine bridge connections
+        state_interval: Perform state aggregation every N epochs
+        nation_interval: Perform nation aggregation every N epochs
     """
     iters = [iter(ld) for ld in loaders]
     
-    for level in hierarchy_state.level_runtimes:
-        cfg = level.config
-        if not cfg.enabled or cfg.interval_seconds <= 0:
-            level.next_round_epoch = None
-            level.initialized = True
-            continue
-        if not level.initialized:
-            # Use interval_seconds as epoch interval
-            level.next_round_epoch = current_epoch + int(cfg.interval_seconds)
-            level.initialized = True
-
-    with torch.no_grad():
-        X_bootstrap = get_param_matrix(models).to(device)
-        X_bootstrap, changed = _process_high_levels(
-            X=X_bootstrap,
-            hierarchy_state=hierarchy_state,
-            device=device,
-            current_epoch=current_epoch,
-        )
-        if changed:
-            set_param_matrix(models, X_bootstrap)
-
+    # Training steps (local SGD only, no averaging during steps)
     for _ in range(steps):
-        # Local SGD inside each node
         for idx, model in enumerate(models):
             try:
                 batch = next(iters[idx])
@@ -171,124 +104,115 @@ def run_steps_hierarchical_mydclique(
                 iters[idx] = iter(loaders[idx])
                 batch = next(iters[idx])
             local_sgd_step(model, optims[idx], batch, device)
-
-    # All aggregations at end of epoch
+    
+    # Extract hierarchy info
+    clique_assignments = hierarchy_state['clique_assignments']
+    state_to_cliques = hierarchy_state['state_to_cliques']
+    scope_instances = hierarchy_state['scope_instances']
+    
+    # Build clique list (list of node lists)
+    cliques_list = [assignment['nodes'] for assignment in clique_assignments]
+    
+    # Build state list
+    states_list = [scope.nodes for scope in scope_instances[1].values()]
+    
+    # All aggregations happen at END of epoch
     with torch.no_grad():
         X = get_param_matrix(models).to(device)
-
-        # Intra-clique averaging
-        for clique in hierarchy_state.cliques.values():
-            idx = torch.tensor(clique.nodes, device=device, dtype=torch.long)
+        
+        # 1. Clique averaging (always)
+        for clique in cliques_list:
+            if len(clique) == 0:
+                continue
+            idx = torch.tensor(clique, device=device, dtype=torch.long)
             mean_vec = X.index_select(0, idx).mean(dim=0)
             X[idx] = mean_vec
-
-        set_param_matrix(models, X)
-
-    # Check for high-level aggregations at end of epoch
-    with torch.no_grad():
-        X = get_param_matrix(models).to(device)
-        X, updated = _process_high_levels(
-            X=X,
-            hierarchy_state=hierarchy_state,
-            device=device,
-            current_epoch=current_epoch,
-        )
-        if updated:
-            set_param_matrix(models, X)
-
-
-def _process_high_levels(
-    X: torch.Tensor,
-    hierarchy_state: HierarchyRuntimeState,
-    device,
-    current_epoch: int,
-) -> Tuple[torch.Tensor, bool]:
-    """
-    Run all due high-level rounds based on epoch intervals.
-    """
-    updated = False
-    due_levels = [
-        level
-        for level in hierarchy_state.level_runtimes
-        if level.next_round_epoch is not None 
-        and current_epoch >= level.next_round_epoch
-        and level.last_triggered_epoch < current_epoch
-    ]
-    
-    if not due_levels:
-        return X, updated
         
-    due_levels.sort(key=lambda lvl: lvl.scope_index)
-    for level in due_levels:
-        X = _run_level_round(level, hierarchy_state, X, device)
-        updated = True
-        level.last_triggered_epoch = current_epoch
-        _schedule_next_round(level, current_epoch)
-
-    return X, updated
-
-
-def _run_level_round(
-    level: LevelRuntime,
-    hierarchy_state: HierarchyRuntimeState,
-    X: torch.Tensor,
-    device,
-) -> torch.Tensor:
-    cfg = level.config
-    child_level_idx = level.child_level_index
-
-    for scope in level.scopes.values():
-        if not scope.instance.nodes:
-            continue
-
-        scope.select_aggregator()  # round-robin selection
-        payloads: List[torch.Tensor] = []
-
-        if child_level_idx is None:
-            # Lowest high level: gather models from cliques
-            for clique_id in scope.child_cliques:
-                clique = hierarchy_state.cliques.get(clique_id)
-                if clique is None or not clique.nodes:
-                    continue
-                fanout_node = clique.select_fanout()
-                payloads.append(X[fanout_node].clone())
-        else:
-            child_scopes = hierarchy_state.scopes_by_level[child_level_idx]
-            for child_id in scope.instance.child_ids:
-                child_scope = child_scopes.get(child_id)
-                if child_scope is None or not child_scope.instance.nodes:
-                    continue
-                fanout_node = child_scope.select_fanout_node()
-                if child_scope.latest_model is None:
-                    payloads.append(X[fanout_node].clone())
-                else:
-                    payloads.append(child_scope.latest_model.clone())
-
-        if not payloads:
-            continue
-
-        aggregated = torch.stack(payloads, dim=0).mean(dim=0)
-        scope.latest_model = aggregated.clone()
-
-        idx = torch.tensor(scope.instance.nodes, device=device, dtype=torch.long)
-        expanded = aggregated.unsqueeze(0).expand(len(scope.instance.nodes), -1)
-
-        if cfg.apply_policy == "replace":
-            X[idx] = expanded
-        elif cfg.apply_policy == "interpolate":
-            alpha = cfg.apply_alpha
-            X[idx] = (1 - alpha) * X[idx] + alpha * expanded
-        else:
-            raise ValueError(f"Unsupported apply_policy '{cfg.apply_policy}'")
-
-    return X
-
-
-def _schedule_next_round(level: LevelRuntime, current_epoch: int) -> None:
-    cfg = level.config
-    if not cfg.enabled or cfg.interval_epochs <= 0:
-        level.next_round_epoch = None
-        return
-
-    # Schedule next aggregation based on epoch interval
-    level.next_round_epoch = current_epoch + cfg.interval_epochs
+        # 2. State aggregation with bridge-based connectivity (if due)
+        if current_epoch > 0 and state_interval > 0 and current_epoch % state_interval == 0:
+            if adjacency is not None:
+                # Find bridge connections between cliques
+                bridge_connections = find_bridge_connections(cliques_list, adjacency)
+                
+                # Build clique-to-state mapping
+                clique_to_state = {}
+                for state_idx, state_id in enumerate(scope_instances[1].keys()):
+                    state_clique_ids = state_to_cliques[state_id]
+                    for clique_idx, assignment in enumerate(clique_assignments):
+                        if assignment['clique_id'] in state_clique_ids:
+                            clique_to_state[clique_idx] = state_idx
+                
+                # For each state, aggregate only connected cliques
+                for state_idx, state_nodes in enumerate(states_list):
+                    if len(state_nodes) == 0:
+                        continue
+                    
+                    # Get cliques in this state
+                    state_clique_indices = [i for i, s in clique_to_state.items() if s == state_idx]
+                    
+                    if len(state_clique_indices) == 0:
+                        continue
+                    
+                    # Find connected components within this state using bridge connections
+                    visited = set()
+                    components = []
+                    
+                    for start_idx in state_clique_indices:
+                        if start_idx in visited:
+                            continue
+                        
+                        # BFS to find all cliques connected to start_idx
+                        component = []
+                        queue = [start_idx]
+                        visited.add(start_idx)
+                        
+                        while queue:
+                            curr_idx = queue.pop(0)
+                            component.append(curr_idx)
+                            
+                            # Add connected cliques that are in the same state
+                            for neighbor_idx in bridge_connections[curr_idx]:
+                                if neighbor_idx in state_clique_indices and neighbor_idx not in visited:
+                                    visited.add(neighbor_idx)
+                                    queue.append(neighbor_idx)
+                        
+                        components.append(component)
+                    
+                    # Aggregate each connected component separately
+                    for component in components:
+                        if len(component) == 0:
+                            continue
+                        
+                        # Get all nodes in this connected component
+                        component_nodes = []
+                        for clique_idx in component:
+                            component_nodes.extend(cliques_list[clique_idx])
+                        
+                        if len(component_nodes) == 0:
+                            continue
+                        
+                        # Average models in this component
+                        comp_idx = torch.tensor(component_nodes, device=device, dtype=torch.long)
+                        comp_avg = X.index_select(0, comp_idx).mean(dim=0)
+                        
+                        # Broadcast to all nodes in the component
+                        X[comp_idx] = comp_avg.unsqueeze(0).expand(len(component_nodes), -1)
+        
+        # 3. Nation aggregation (if due)
+        if current_epoch > 0 and nation_interval > 0 and current_epoch % nation_interval == 0:
+            # Take one representative from each state
+            state_representatives = []
+            for state_nodes in states_list:
+                if len(state_nodes) > 0:
+                    state_representatives.append(state_nodes[0])
+            
+            if len(state_representatives) > 0:
+                # Average across states
+                rep_idx = torch.tensor(state_representatives, device=device, dtype=torch.long)
+                nation_avg = X.index_select(0, rep_idx).mean(dim=0)
+                
+                # Broadcast to all nodes
+                n_nodes = len(models)
+                X[:] = nation_avg.unsqueeze(0).expand(n_nodes, -1)
+        
+        set_param_matrix(models, X)

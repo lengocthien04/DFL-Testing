@@ -115,6 +115,33 @@ def main():
             seed=args.seed,
         )
 
+        # Build adjacency matrix with bridges
+        cliques_list = [assignment['nodes'] for assignment in clique_assignments]
+        
+        # Build clique adjacency (intra-clique edges)
+        A = np.zeros((args.n, args.n), dtype=np.int32)
+        for clique in cliques_list:
+            for u in clique:
+                for v in clique:
+                    if u != v:
+                        A[u, v] = 1
+        
+        # Add inter-clique bridges using small_world mode
+        from topology.dclique import build_interclique_edges, assign_node_edges_balanced
+        
+        interclique_edges = build_interclique_edges(
+            num_cliques=len(cliques_list),
+            mode="small_world",
+            small_world_c=2
+        )
+        
+        node_edges, _ = assign_node_edges_balanced(cliques_list, interclique_edges)
+        
+        # Add bridge edges to adjacency matrix
+        for u, v in node_edges:
+            A[u, v] = 1
+            A[v, u] = 1
+        
         hierarchy_state = build_hierarchy_runtime(
             level_configs=levels,
             scope_instances=scope_instances,
@@ -124,16 +151,9 @@ def main():
 
         step_runner = lambda models, optims, steps, epoch=1: run_steps_hierarchical_mydclique(
             models, optims, loaders,
-            hierarchy_state, device, steps, current_epoch=epoch
+            hierarchy_state, device, steps, current_epoch=epoch,
+            adjacency=A, state_interval=1, nation_interval=1
         )
-
-        A = np.zeros((args.n, args.n), dtype=np.int32)
-        for assignment in clique_assignments:
-            nodes = assignment["nodes"]
-            for u in nodes:
-                for v in nodes:
-                    if u != v:
-                        A[u, v] = 1
 
         out, fig = f"outputs/mnist_hierarchy_n{args.n}_c{args.clique_size}_alpha{args.alpha}_output.txt", f"outputs/mnist_hierarchy_n{args.n}_c{args.clique_size}_alpha{args.alpha}_accuracy.png"
 

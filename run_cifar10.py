@@ -16,6 +16,7 @@ from topology.dclique import build as build_dclique
 from topology.dclique import build_clique_neighbors
 from topology.refined_fw import build as build_refined
 from training.dsgd import run_steps_plain_dsgd
+from training.dsgd_dropout import run_steps_dsgd_dropout
 from training.dcliques_alg import run_steps_dcliques_two_stage
 from training.mydclique_alg import build_agg_selector, run_steps_mydclique
 from training.hierarchical_mydclique import build_hierarchy_runtime, run_steps_hierarchical_mydclique
@@ -28,7 +29,7 @@ from utils.dynamic_hierarchy import generate_two_state_hierarchy
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", required=True, choices=["fully","random","dclique","refined","mydclique","hierarchy","hierarchy_simple"])
+    ap.add_argument("--method", required=True, choices=["fully","fully_dropout","random","dclique","refined","mydclique","hierarchy","hierarchy_simple"])
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--batch", type=int, default=20)
@@ -40,6 +41,7 @@ def main():
     ap.add_argument("--swaps", type=int, default=5000)
     ap.add_argument("--fw_iters", type=int, default=10)
     ap.add_argument("--lam", type=float, default=0.1)
+    ap.add_argument("--dropout_count", type=int, default=3)
     ap.add_argument("--hierarchy_config", type=str, default="config/hierarchy_config.json")
     ap.add_argument("--nodes_map", type=str, default="config/nodes_map.json")
     args = ap.parse_args()
@@ -61,6 +63,15 @@ def main():
         A, W = fully_connected(args.n, device)
         step_runner = lambda models, optims, steps: run_steps_plain_dsgd(models, optims, loaders, W, device, steps)
         out, fig = f"outputs/cifar10_fully_n{args.n}_alpha{args.alpha}_output.txt", f"outputs/cifar10_fully_n{args.n}_alpha{args.alpha}_accuracy.png"
+
+    elif args.method == "fully_dropout":
+        A, W = fully_connected(args.n, device)
+        step_runner = lambda models, optims, steps, epoch=1: run_steps_dsgd_dropout(
+            models, optims, loaders, W, device, steps, 
+            dropout_count=args.dropout_count, 
+            seed=args.seed + epoch
+        )
+        out, fig = f"outputs/cifar10_fully_dropout{args.dropout_count}_n{args.n}_alpha{args.alpha}_output.txt", f"outputs/cifar10_fully_dropout{args.dropout_count}_n{args.n}_alpha{args.alpha}_accuracy.png"
 
     elif args.method == "random":
         A, W = build_random(args.n, args.dmax, args.seed, device)
@@ -245,6 +256,8 @@ def main():
 
         for epoch in range(1, args.epochs + 1):
             if args.method == "hierarchy" or args.method == "hierarchy_simple":
+                step_runner(models, optims, steps_per_epoch, epoch)
+            elif args.method == "fully_dropout":
                 step_runner(models, optims, steps_per_epoch, epoch)
             else:
                 step_runner(models, optims, steps_per_epoch)

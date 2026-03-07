@@ -10,11 +10,14 @@ class LogisticMNIST(nn.Module):
         return self.fc(x.view(x.size(0), -1))
 
 class MnistLinear(nn.Module):
-    """Single linear layer for MNIST (from p2pfl) - equivalent to LogisticMNIST."""
-    def __init__(self, num_classes: int = 10):
+    """Single linear layer for MNIST (from p2pfl)."""
+    def __init__(self, input_shape=(1, 28, 28), num_classes: int = 10):
         super().__init__()
-        self.fc = nn.Linear(28 * 28, num_classes)
+        features = 1
+        for dim in input_shape:
+            features *= dim
+        self.fc = nn.Linear(features, num_classes)
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
-        return F.log_softmax(self.fc(x), dim=1)
+        return self.fc(x)
